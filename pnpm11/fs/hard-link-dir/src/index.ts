@@ -22,7 +22,39 @@ export function hardLinkDir (src: string, destDirs: string[]): void {
   }
   _hardLinkDir(src, tempDestDirs, true)
   for (let i = 0; i < filteredDestDirs.length; i++) {
-    renameOverwriteSync(tempDestDirs[i], filteredDestDirs[i])
+    commitDir(src, tempDestDirs[i], filteredDestDirs[i])
+  }
+}
+
+/**
+ * Move a staged directory onto its final hoisted location.
+ *
+ * Backfills of different built packages run concurrently (see the build
+ * `finally` in `@pnpm/building.during-install`) and stage their temp directories
+ * under shared parents. While we commit, another worker can move a common
+ * ancestor directory aside — `rename-overwrite` swaps the existing target out
+ * of the way before renaming into it — carrying our staged `tempDestDir`, and
+ * possibly `destDir` itself, with it. The rename then fails with ENOENT (the
+ * staged source vanished) or EEXIST/ENOTEMPTY/ENOTDIR (the destination is being
+ * contended). All concurrent writers of one built package copy byte-identical
+ * content, so losing this race is safe: re-link the still-intact `src` straight
+ * into `destDir`. This mirrors the ENOENT/EXDEV fallbacks already guarding every
+ * file-level operation in this module, keeping the commit loop from leaking an
+ * uncaught ERR_PNPM_ENOENT.
+ */
+function commitDir (src: string, tempDestDir: string, destDir: string): void {
+  try {
+    renameOverwriteSync(tempDestDir, destDir)
+  } catch (err: unknown) {
+    if (
+      !util.types.isNativeError(err) || !('code' in err) ||
+      (err.code !== 'ENOENT' && err.code !== 'EEXIST' && err.code !== 'ENOTEMPTY' && err.code !== 'ENOTDIR')
+    ) {
+      throw err
+    }
+    fs.rmSync(tempDestDir, { recursive: true, force: true })
+    gfs.mkdirSync(destDir, { recursive: true })
+    _hardLinkDir(src, [destDir], true)
   }
 }
 
