@@ -46,3 +46,21 @@ test("don't fail on missing source and dest directories", () => {
   expect(fs.existsSync(missingDirSrc)).toBe(false)
   expect(fs.existsSync(missingDirDest)).toBe(true)
 })
+
+// A concurrent backfill can move a shared ancestor (and our staged temp dir
+// with it) aside between staging and the commit rename, so the rename sees no
+// source to move. An empty source reproduces that state deterministically: it
+// stages no temp directory, so the commit rename is asked to move a path that
+// does not exist. The commit must recover instead of letting ERR_PNPM_ENOENT
+// escape the unguarded loop (https://github.com/pnpm/pnpm/issues/10179).
+test('commit recovers when the staged source is gone', () => {
+  const tempDir = createTempDir()
+  const srcDir = path.join(tempDir, 'source')
+  const destDir = path.join(tempDir, 'nested/dest')
+
+  // An existing source dir with nothing to link stages no temp directory.
+  fs.mkdirSync(srcDir, { recursive: true })
+
+  expect(() => hardLinkDir(srcDir, [destDir])).not.toThrow()
+  expect(fs.existsSync(destDir)).toBe(true)
+})
